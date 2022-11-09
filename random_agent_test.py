@@ -6,7 +6,7 @@ import d4rl # Import required to register environments
 import matplotlib.pyplot as plt
 
 # Create the environment
-env = gym.make('antmaze-umaze-diverse-custom-v2')
+env = gym.make('maze2d-open-v0')
 
 # d4rl abides by the OpenAI gym interface
 
