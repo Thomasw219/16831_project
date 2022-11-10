@@ -2,6 +2,7 @@ import imageio
 from PIL import Image
 import gym
 import d4rl # Import required to register environments
+import numpy as np
 
 import matplotlib.pyplot as plt
 
@@ -14,13 +15,10 @@ total_rewards = []
 for _ in range(100):
     obs = env.reset()
     total_reward = 0
-    for i in range(1000):
+    for i in range(150):
         obs, reward, done, info = env.step(env.action_space.sample())
         total_reward += reward
 
     total_rewards.append(total_reward)
 
-plt.scatter(range(len(total_rewards)), total_rewards)
-plt.ylabel("Episode Returns")
-plt.xlabel("Random goal (individual episodes)")
-plt.savefig("./data/fig.png")
+print(np.mean(total_rewards), np.std(total_rewards))
