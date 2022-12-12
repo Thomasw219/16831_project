@@ -9,9 +9,9 @@ vector_decoder: {activation: elu, layer_sizes: [256, 256], dist: mse}
 reward_decoder: {activation: elu, layer_sizes: [256, 256], output_dim: 1, dist: mse}
 discount_decoder: {activation: elu, layer_sizes: [256, 256], output_dim: 1, dist: bernoulli}
 
-image_scale: 1.0
-vector_scale: 1000.0
-reward_scale: 1000.0
+goal_scale: 1.0
+vector_scale: 1.0
+reward_scale: 1.0
 discount_scale: 1.0
 beta: 1.0
 

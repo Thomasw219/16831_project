@@ -47,7 +47,7 @@ class Memory:
                     is_lasts = np.array(self.current_episode['is_last'], dtype=np.float16),
                 )
                 self.last_episode = episode
-                if self.test_timesteps == 0 or (self.test_timesteps) / (self.test_timesteps + self.train_timesteps) < self.test_ratio:
+                if self.test_ratio != 0 and (self.test_timesteps == 0 or (self.test_timesteps) / (self.test_timesteps + self.train_timesteps) < self.test_ratio):
                     self.test_episodes.append(episode)
                     self.test_timesteps += length
                 else:

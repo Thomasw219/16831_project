@@ -18,16 +18,19 @@ def train_agent(agent: DreamerV2, env, n_steps):
         reward = 0.0
         is_first = True
         is_last = False
-        agent.record(action=action, observation=obs, reward=[reward], is_first=is_first, is_last=[is_last])
+        agent.record(action=action, observation=obs, reward=[reward], is_first=[is_first], is_last=[is_last])
+        episode_steps = 0
         while not is_last:
+            episode_steps += 1
             steps_elapsed += 1
             is_first = False
             action = agent.step(obs)
             obs, reward, is_last, _ = env.step(action)
-            agent.record(action=action, observation=obs, reward=[reward], is_first=is_first, is_last=[is_last])
+            agent.record(action=action, observation=obs, reward=[reward], is_first=[is_first], is_last=[is_last])
             if is_last:
                 agent.reset()
                 agent.log_episode()
+        agent.train_joint(episode_steps)
 
 def eval_agent(agent, env, n_episodes):
     all_returns = []
@@ -61,9 +64,10 @@ def main(cfg: DictConfig):
     RUN_NAME = "run0"
     ALGO = "DreamerV2"
 
-    agent = DreamerV2(cfg.agent, dict(vector=(4,), goal=(2,)), env.action_space.sample().shape[0], None)
+    agent = DreamerV2(cfg.agent, dict(vector=(4,), goal=(2,)), env.action_space.sample().shape[0], RUN_NAME)
 
-    init_mean, init_std = eval_agent(agent, env, N_EVAL_EPISODES)
+    # init_mean, init_std = eval_agent(agent, env, N_EVAL_EPISODES)
+    init_mean, init_std = 0, 0
 
     print_rewards = lambda means, stds: print(f"Reward means: {means[-1]} Stds {stds[-1]}")
 
@@ -74,7 +78,7 @@ def main(cfg: DictConfig):
     for step in range(np.ceil(TOTAL_STEPS / EVAL_EVERY).astype(int)):
         print(f"Step: {step}")
         train_agent(agent, env, EVAL_EVERY)
-        agent.save_networks(RUN_NAME)
+        agent.save_networks(f"{RUN_NAME}_{step}")
         mean, std = eval_agent(agent, env, N_EVAL_EPISODES)
         reward_means.append(mean)
         reward_stds.append(std)

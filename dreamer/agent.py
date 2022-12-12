@@ -233,6 +233,14 @@ class DreamerV2:
                 metrics = {**model_train_metrics, **behavior_train_metrics}
             self.log(metrics)
 
+    def train_joint(self, steps):
+        for _ in tqdm(range(steps), desc="Joint Model/Behavior Training"):
+            data = self.mem.train_sample(self.cfg.device)
+            model_train_metrics = self.train_model_step(data)
+            behavior_train_metrics = self.train_behavior_step(data)
+            metrics = {**model_train_metrics, **behavior_train_metrics}
+            self.log(metrics)
+
     def train_test_offline_joint(self, steps):
         for _ in tqdm(range(steps), desc="Joint Model/Behavior Training"):
             data = self.mem.train_sample(self.cfg.device)
@@ -292,15 +300,6 @@ class DreamerV2:
         metrics = {**metrics, **memory_metrics}
         for k, v in metrics.items():
             self.summary_writer.add_scalar(k, v, self.global_step)
-        if self.global_step % self.cfg.video_every == 0:
-            if len(self.mem.test_episodes) > 0:
-                real_images, reconstructed_images = self.wm.create_video(self.mem.test_sample(self.cfg.device))
-                self.summary_writer.add_images("test_goal_real", real_images[:, 0, 0].unsqueeze(1).repeat(1, 3, 1, 1), self.global_step, dataformats='NCHW')
-                self.summary_writer.add_images("test_goal_reconstructed", reconstructed_images[:, 0, 0].unsqueeze(1).repeat(1, 3, 1, 1), self.global_step, dataformats='NCHW')
-            if len(self.mem.train_episodes) > 0:
-                real_images, reconstructed_images = self.wm.create_video(self.mem.train_sample(self.cfg.device))
-                self.summary_writer.add_images("train_goal_real", real_images[:, 0, 0].unsqueeze(1).repeat(1, 3, 1, 1), self.global_step, dataformats='NCHW')
-                self.summary_writer.add_images("train_goal_reconstructed", reconstructed_images[:, 0, 0].unsqueeze(1).repeat(1, 3, 1, 1), self.global_step, dataformats='NCHW')
 
         if self.global_step % self.cfg.save_every == 0 and self.global_step > 0:
             self.save_networks(self.global_step)
@@ -325,9 +324,9 @@ class WorldModel(nn.Module):
     def loss(self, data, state=None):
         data = self.preprocess(data)
         observations = data['observations']
-        batch_shape = observations['goals'].shape[:-len(self.img_shape)]
+        batch_shape = observations['goals'].shape[:-len(self.goal_shape)]
         batch_obs = dict(
-            images=observations['goals'].reshape((-1,) + self.img_shape),
+            goals=observations['goals'].reshape((-1,) + self.goal_shape),
             vectors=observations['vectors'].reshape((-1,) + self.vector_shape),
         )
         embeddings = self.encoder(batch_obs)
@@ -338,22 +337,22 @@ class WorldModel(nn.Module):
 
         feats = self.rssm.get_feat_t_b(posts)
         feats = feats.reshape((-1, feats.shape[-1]))
-        image_loss, vector_loss, image_mse, vector_mse = self.obs_decoder.get_nll_mse(feats, batch_obs)
+        goal_loss, vector_loss, goal_mse, vector_mse = self.obs_decoder.get_nll_mse(feats, batch_obs)
         reward_loss, reward_mse = self.reward_decoder.get_nll_mse(feats, data['rewards'].reshape((-1, 1)))
         discount_loss = -torch.mean(self.discount_decoder(feats).log_prob(data['is_lasts'].reshape((-1, 1))))
-        model_loss = self.cfg.image_scale * image_loss + self.cfg.vector_scale * vector_loss + self.cfg.reward_scale * reward_loss + self.cfg.discount_scale * discount_loss + self.cfg.beta * kl_loss
+        model_loss = self.cfg.goal_scale * goal_loss + self.cfg.vector_scale * vector_loss + self.cfg.reward_scale * reward_loss + self.cfg.discount_scale * discount_loss + self.cfg.beta * kl_loss
 
         metrics = dict(
             kl_loss=kl_loss,
             kl_val=kl_val,
-            image_loss=image_loss,
+            goal_loss=goal_loss,
             vector_loss=vector_loss,
             reward_loss=reward_loss,
             discount_loss=discount_loss,
             model_loss=model_loss,
             prior_entropy=prior_entropy,
             post_entropy=post_entropy,
-            image_mse=image_mse,
+            goal_mse=goal_mse,
             vector_mse=vector_mse,
             reward_mse=reward_mse,
         )
