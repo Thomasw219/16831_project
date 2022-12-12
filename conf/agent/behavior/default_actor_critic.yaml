@@ -1,0 +1,22 @@
+lamb: 0.95
+gamma: 0.99
+eta: 1e-3
+pre_tanh_bound: 1.0
+pre_tanh_bound_penalty_scale: 0.0
+horizon: 15
+
+policy_grad: dynamics
+
+actor: {activation: elu, layer_sizes: [400, 400, 400, 400], dist: tanh_normal, min_std: 0.1}
+critic: {activation: elu, output_dim: 1, layer_sizes: [400, 400, 400, 400], dist: mse}
+
+update_type: polyak
+polyak:
+  alpha: 0.01
+hard:
+  critic_update_every: 100
+
+actor_opt: {lr: 4e-5, eps: 1e-5, weight_decay: 1e-6}
+actor_clip: 100
+critic_opt: {lr: 1e-4, eps: 1e-5, weight_decay: 1e-6}
+critic_clip: 100

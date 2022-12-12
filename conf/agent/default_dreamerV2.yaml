@@ -1,0 +1,15 @@
+device: cuda:0
+
+memory_load_path: "./memory_data.npy"
+memory_save_path: "./memory_data.npy"
+
+termination_threshold: 0.5
+
+video_every: 250
+save_every: 5000
+test_every: 25
+
+defaults:
+  - world_model: default_world_model
+  - behavior: default_actor_critic
+  - memory: default_memory

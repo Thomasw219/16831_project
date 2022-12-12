@@ -1,0 +1,9 @@
+filter:
+  history_len: 32
+  sample_freq: 20
+  critical_freq: 0.5
+  order: 2
+
+goal_location: quarter # quarter/whole
+arm_start: fixed # random/fixed
+reward_type: dense # sparse/dense

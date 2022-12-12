@@ -1,0 +1,26 @@
+prefill_episodes: 100
+from_demonstrations: True
+expert_wm_path: /home/thomas/DreamerV2-Pytorch/outputs/2022-07-23/16-38-21/wm_80000.pth
+expert_behavior_path: /home/thomas/DreamerV2-Pytorch/outputs/2022-07-23/16-38-21/behavior_80000.pth
+
+policy_interact_episodes: 500
+
+pretrain: True
+model_pretrain_steps: 2000
+offline_pretrain: True
+behavior_pretrain_steps: 5000
+
+episode_joint_train_steps: 150
+
+wm_load_path: ???
+behavior_load_path: ???
+
+run_name: from_demonstration_reduced_problem_size_butterworth_0.5fc_sparse_polyak
+
+defaults:
+  - agent: default_dreamerV2
+  - env: arm_env
+
+hydra:
+  job:
+    chdir: True
