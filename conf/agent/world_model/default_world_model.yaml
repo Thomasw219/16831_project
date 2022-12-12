@@ -13,7 +13,7 @@ goal_scale: 1.0
 vector_scale: 1.0
 reward_scale: 1.0
 discount_scale: 1.0
-beta: 1.0
+beta: 0.1
 
 lr: 1e-4
 eps: 1e-5

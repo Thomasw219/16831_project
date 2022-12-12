@@ -99,3 +99,57 @@ class Memory:
             test_episodes=len(self.test_episodes),
             test_timesteps=self.test_timesteps,
         )
+
+class HERMemory(Memory):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        self.future_ratio = 0.5
+        self.pos_mean = np.array([1.5, 2.5])
+        self.pos_std = np.array([3, 5])
+        self.goal_max = np.array([0.53, 0.51])
+        self.goal_min = np.array([-0.19, -0.31])
+
+    def compute_reward(self, achieved_goal, desired_goal):
+        achieved_goal = achieved_goal * self.pos_std + self.pos_mean
+        desired_goal = desired_goal * self.pos_std + self.pos_mean
+        reward = 1.0 if np.linalg.norm(desired_goal - achieved_goal) <= 0.5 else 0.0
+        return reward
+
+    def sample(self, episodes, device):
+        batch_episodes = np.random.choice(episodes, self.cfg.B, replace=True)
+        her_future_goal = np.random.uniform(0.0, 1.0, size=(len(batch_episodes),)) < self.future_ratio
+        batch_goals = []
+        batch_vectors = []
+        batch_actions = []
+        batch_rewards = []
+        batch_is_firsts = []
+        batch_is_lasts = []
+
+        for (episode, use_future_goal) in zip(batch_episodes, her_future_goal):
+            length = episode['actions'].shape[0]
+            t_s = np.clip(np.random.randint(0, length), 0, length - self.cfg.T - 1)
+            t_f = t_s + self.cfg.T
+            if use_future_goal:
+                future_index = np.random.randint(t_s, length - 1)
+                future_goal = episode['observations']['achieved_goal'][future_index]
+                batch_goals.append(np.stack([future_goal for _ in range(self.cfg.T)], axis=0))
+                batch_rewards.append(np.array([[self.compute_reward(episode['observations']['achieved_goal'][t_s + i], future_goal)] for i in range(self.cfg.T)]))
+            else:
+                sampled_goal = np.random.uniform(self.goal_min, self.goal_max)
+                batch_goals.append(np.stack([sampled_goal for _ in range(self.cfg.T)], axis=0))
+                batch_rewards.append(np.array([[self.compute_reward(episode['observations']['achieved_goal'][t_s + i], sampled_goal)] for i in range(self.cfg.T)]))
+            batch_vectors.append(episode['observations']['observation'][t_s: t_f])
+            batch_actions.append(episode['actions'][t_s: t_f])
+            batch_is_firsts.append(episode['is_firsts'][t_s: t_f])
+            batch_is_lasts.append(episode['is_lasts'][t_s: t_f])
+
+        return dict(
+            observations=dict(
+                goals=torch.tensor(np.stack(batch_goals, axis=1), device=device, dtype=torch.float32),
+                vectors=torch.tensor(np.stack(batch_vectors, axis=1), device=device),
+            ),
+            actions=torch.tensor(np.stack(batch_actions, axis=1), device=device),
+            rewards=torch.tensor(np.stack(batch_rewards, axis=1), device=device, dtype=torch.float32),
+            is_firsts=torch.tensor(np.stack(batch_is_firsts, axis=1), device=device),
+            is_lasts=torch.tensor(np.stack(batch_is_lasts, axis=1), device=device),
+        )

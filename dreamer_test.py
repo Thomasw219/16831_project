@@ -7,7 +7,7 @@ import numpy as np
 
 from omegaconf import DictConfig, OmegaConf
 
-from dreamer.agent import DreamerV2
+from dreamer.agent import DreamerV2, HERDreamerV2
 
 def train_agent(agent: DreamerV2, env, n_steps):
     steps_elapsed = 0
@@ -30,7 +30,7 @@ def train_agent(agent: DreamerV2, env, n_steps):
             if is_last:
                 agent.reset()
                 agent.log_episode()
-        agent.train_joint(episode_steps)
+        agent.train_joint(episode_steps // 4)
 
 def eval_agent(agent, env, n_episodes):
     all_returns = []
@@ -59,21 +59,27 @@ def main(cfg: DictConfig):
     TOTAL_STEPS = 500000
     EVAL_EVERY = 10000
     N_EVAL_EPISODES = 100
-    EVAL_LOG_PATH = "./data/"
+    EVAL_LOG_PATH = "/home/luyuan/thomaswe/16831_project/data/"
     LOG_DIR = "./logs/"
     RUN_NAME = "run0"
-    ALGO = "DreamerV2"
+    ALGO = "HERDreamerV2_lower_kl"
 
-    agent = DreamerV2(cfg.agent, dict(vector=(4,), goal=(2,)), env.action_space.sample().shape[0], RUN_NAME)
+    if "HER" in ALGO:
+        agent = HERDreamerV2(cfg.agent, dict(vector=(4,), goal=(2,)), env.action_space.sample().shape[0], RUN_NAME)
+        print("HER AGENT")
+    else:
+        agent = DreamerV2(cfg.agent, dict(vector=(4,), goal=(2,)), env.action_space.sample().shape[0], RUN_NAME)
+        print("VANILLA AGENT")
 
-    # init_mean, init_std = eval_agent(agent, env, N_EVAL_EPISODES)
-    init_mean, init_std = 0, 0
+    init_mean, init_std = eval_agent(agent, env, N_EVAL_EPISODES)
+    # init_mean, init_std = 0, 0
 
     print_rewards = lambda means, stds: print(f"Reward means: {means[-1]} Stds {stds[-1]}")
 
     reward_means = [init_mean]
     reward_stds = [init_std]
     print_rewards(reward_means, reward_stds)
+    np.savez(os.path.join(EVAL_LOG_PATH, f"{ALGO}_reward_data"), means=reward_means, stds=reward_stds)
 
     for step in range(np.ceil(TOTAL_STEPS / EVAL_EVERY).astype(int)):
         print(f"Step: {step}")

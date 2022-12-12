@@ -7,7 +7,7 @@ from collections import deque
 from tqdm import tqdm
 
 from .utils import FreezeParameters
-from .memory import Memory
+from .memory import Memory, HERMemory
 from .networks import RSSM, FusionDecoder, FusionEncoder, MLPDistribution
 
 class DreamerV2:
@@ -305,6 +305,11 @@ class DreamerV2:
             self.save_networks(self.global_step)
 
         self.global_step += 1
+
+class HERDreamerV2(DreamerV2):
+    def __init__(self, cfg, obs_shape, action_dim, name):
+        super().__init__(cfg, obs_shape, action_dim, name)
+        self.mem = HERMemory(cfg.memory)
 
 class WorldModel(nn.Module):
     def __init__(self, cfg, obs_shape, action_dim):
