@@ -57,7 +57,7 @@ class Memory:
 
     def sample(self, episodes, device):
         batch_episodes = np.random.choice(episodes, self.cfg.B, replace=True)
-        batch_images = []
+        batch_goals = []
         batch_vectors = []
         batch_actions = []
         batch_rewards = []
@@ -68,8 +68,8 @@ class Memory:
             length = episode['actions'].shape[0]
             t_s = np.clip(np.random.randint(0, length), 0, length - self.cfg.T - 1)
             t_f = t_s + self.cfg.T
-            batch_images.append(episode['observations']['image'][t_s: t_f])
-            batch_vectors.append(episode['observations']['vector'][t_s: t_f])
+            batch_goals.append(episode['observations']['desired_goal'][t_s: t_f])
+            batch_vectors.append(episode['observations']['observation'][t_s: t_f])
             batch_actions.append(episode['actions'][t_s: t_f])
             batch_rewards.append(episode['rewards'][t_s: t_f])
             batch_is_firsts.append(episode['is_firsts'][t_s: t_f])
@@ -77,7 +77,7 @@ class Memory:
 
         return dict(
             observations=dict(
-                images=torch.tensor(np.stack(batch_images, axis=1), device=device),
+                goals=torch.tensor(np.stack(batch_goals, axis=1), device=device),
                 vectors=torch.tensor(np.stack(batch_vectors, axis=1), device=device),
             ),
             actions=torch.tensor(np.stack(batch_actions, axis=1), device=device),

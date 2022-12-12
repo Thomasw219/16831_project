@@ -38,7 +38,6 @@ def eval_agent(agent, env, n_episodes):
         returns = 0.0
         is_last = False
         while not is_last:
-            steps_elapsed += 1
             action = agent.step(obs)
             obs, reward, is_last, _ = env.step(action)
             returns += reward
@@ -75,9 +74,12 @@ def main(cfg: DictConfig):
     for step in range(np.ceil(TOTAL_STEPS / EVAL_EVERY).astype(int)):
         print(f"Step: {step}")
         train_agent(agent, env, EVAL_EVERY)
-        agent.save_networks()
+        agent.save_networks(RUN_NAME)
         mean, std = eval_agent(agent, env, N_EVAL_EPISODES)
         reward_means.append(mean)
         reward_stds.append(std)
         print_rewards(reward_means, reward_stds)
         np.savez(os.path.join(EVAL_LOG_PATH, f"{ALGO}_reward_data"), means=reward_means, stds=reward_stds)
+
+if __name__ == "__main__":
+    main()

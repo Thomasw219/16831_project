@@ -66,18 +66,18 @@ class ConvEncoder(nn.Module):
         return self.forward(test).shape[-1]
 
 class FusionEncoder(nn.Module):
-    def __init__(self, image_input_shape, vector_input_dim, conv_encoder_params, vector_encoder_params, fusion_encoder_params):
+    def __init__(self, goal_input_dim, vector_input_dim, goal_encoder_params, vector_encoder_params, fusion_encoder_params):
         super().__init__()
-        self.conv_encoder = ConvEncoder(image_input_shape, **conv_encoder_params)
+        self.goal_encoder = StandardMLP(goal_input_dim, **goal_encoder_params)
         self.vector_encoder = StandardMLP(vector_input_dim, **vector_encoder_params)
 
-        self.fusion_encoder = StandardMLP(self.conv_encoder.get_output_dim() + self.vector_encoder.get_output_dim(), **fusion_encoder_params)
+        self.fusion_encoder = StandardMLP(self.goal_encoder.get_output_dim() + self.vector_encoder.get_output_dim(), **fusion_encoder_params)
 
     def get_output_dim(self):
         return self.fusion_encoder.get_output_dim()
 
     def forward(self, obs):
-        image_features = self.conv_encoder.forward(obs['images'] if 'images' in obs.keys() else obs['image'])
+        image_features = self.goal_encoder.forward(obs['goals'] if 'goals' in obs.keys() else obs['goal'])
         vector_features = self.vector_encoder.forward(obs['vectors'] if 'vectors' in obs.keys() else obs['vector'])
         return self.fusion_encoder.forward(torch.cat([image_features, vector_features], dim=-1))
 
@@ -152,20 +152,20 @@ class MLPDistribution(nn.Module):
         return nll, mse
 
 class FusionDecoder(nn.Module):
-    def __init__(self, input_dim, image_output_shape, vector_output_dim, conv_decoder_params, vector_decoder_params):
+    def __init__(self, input_dim, goal_output_dim, vector_output_dim, goal_decoder_params, vector_decoder_params):
         super().__init__()
-        self.conv_decoder = ConvDecoder(input_dim, image_output_shape, **conv_decoder_params)
+        self.goal_decoder = MLPDistribution(input_dim, output_dim=goal_output_dim, **goal_decoder_params)
         self.vector_decoder = MLPDistribution(input_dim, output_dim=vector_output_dim, **vector_decoder_params)
 
     def forward(self, x):
-        return self.conv_decoder(x), self.vector_decoder(x)
+        return self.goal_decoder(x), self.vector_decoder(x)
 
     def get_nll_mse(self, feats, obs):
-        image_dist = self.conv_decoder(feats)
+        image_dist = self.goal_decoder(feats)
         vector_dist = self.vector_decoder(feats)
-        image_nll = -torch.mean(image_dist.log_prob(obs['images']))
+        image_nll = -torch.mean(image_dist.log_prob(obs['goals']))
         vector_nll = -torch.mean(vector_dist.log_prob(obs['vectors']))
-        image_mse = torch.mean(torch.square(image_dist.mean - obs['images']))
+        image_mse = torch.mean(torch.square(image_dist.mean - obs['goals']))
         vector_mse = torch.mean(torch.square(vector_dist.mean - obs['vectors']))
         return image_nll, vector_nll, image_mse, vector_mse
 

@@ -6,9 +6,9 @@ from torch.utils.tensorboard import SummaryWriter
 from collections import deque
 from tqdm import tqdm
 
-from utils import FreezeParameters
-from memory import Memory
-from networks import RSSM, FusionDecoder, FusionEncoder, MLPDistribution
+from .utils import FreezeParameters
+from .memory import Memory
+from .networks import RSSM, FusionDecoder, FusionEncoder, MLPDistribution
 
 class DreamerV2:
     def __init__(self, cfg, obs_shape, action_dim, name):
@@ -311,23 +311,23 @@ class WorldModel(nn.Module):
     def __init__(self, cfg, obs_shape, action_dim):
         super().__init__()
         self.cfg = cfg
-        self.img_shape = (obs_shape['image'][2], obs_shape['image'][0], obs_shape['image'][1]) # Pytorch does channels first
+        self.goal_shape = obs_shape['goal']
         self.vector_shape = obs_shape['vector']
         self.action_dim = action_dim
 
-        self.encoder = FusionEncoder(self.img_shape, self.vector_shape[0], cfg.conv_encoder, cfg.vector_encoder, cfg.fusion_encoder)
+        self.encoder = FusionEncoder(self.goal_shape[0], self.vector_shape[0], cfg.goal_encoder, cfg.vector_encoder, cfg.fusion_encoder)
         self.rssm = RSSM(action_dim, self.encoder.get_output_dim(), **cfg.rssm)
         feature_dim = self.rssm.get_output_dim()
-        self.obs_decoder = FusionDecoder(feature_dim, self.img_shape, self.vector_shape[0], cfg.conv_decoder, cfg.vector_decoder)
+        self.obs_decoder = FusionDecoder(feature_dim, self.goal_shape[0], self.vector_shape[0], cfg.goal_decoder, cfg.vector_decoder)
         self.reward_decoder = MLPDistribution(feature_dim, **cfg.reward_decoder)
         self.discount_decoder = MLPDistribution(feature_dim, **cfg.discount_decoder)
 
     def loss(self, data, state=None):
         data = self.preprocess(data)
         observations = data['observations']
-        batch_shape = observations['images'].shape[:-len(self.img_shape)]
+        batch_shape = observations['goals'].shape[:-len(self.img_shape)]
         batch_obs = dict(
-            images=observations['images'].reshape((-1,) + self.img_shape),
+            images=observations['goals'].reshape((-1,) + self.img_shape),
             vectors=observations['vectors'].reshape((-1,) + self.vector_shape),
         )
         embeddings = self.encoder(batch_obs)
@@ -394,31 +394,11 @@ class WorldModel(nn.Module):
             is_lasts = discount_dist.mean,
         )
 
-    def create_video(self, data):
-        with torch.no_grad():
-            observations = data['observations']
-            real_images = observations['images'][8:, 0:2] + 0.5
-
-            batch_shape = observations['images'].shape[:-len(self.img_shape)]
-            batch_obs = dict(
-                images=observations['images'][:, 0:2].reshape((-1,) + self.img_shape).to(torch.float32),
-                vectors=observations['vectors'][:, 0:2].reshape((-1,) + self.vector_shape).to(torch.float32),
-            )
-            embeddings = self.encoder(batch_obs)
-            embeddings = embeddings.reshape((32, 2) + (embeddings.shape[-1],))
-            posts, _ = self.rssm.observe(embeddings[:20], data['actions'][:, 0:2][:20].to(torch.float32), is_firsts=data['is_firsts'][:, 0:2][:20].to(torch.float32), post=None)
-            priors = self.rssm.imagine(data['actions'][:, 0:2][20:].to(torch.float32), prior=posts[19])
-            feats = self.rssm.get_feat_t_b(posts[8:20] + priors)
-            decoder_output = self.obs_decoder.conv_decoder.forward(feats).mean
-            reconstructed_images = torch.clamp(decoder_output.reshape((24, 2) + self.img_shape), -0.5, 0.5) + 0.5
-
-            return real_images[:,:], reconstructed_images[:,:]
-
     def preprocess_obs(self, obs, dtype=torch.float32, device='cpu'):
-        image = torch.tensor(obs['image'], dtype=dtype, device=device).unsqueeze(0)
-        vector = torch.tensor(obs['vector'], dtype=dtype, device=device).unsqueeze(0)
+        goal = torch.tensor(obs['desired_goal'], dtype=dtype, device=device).unsqueeze(0)
+        vector = torch.tensor(obs['observation'], dtype=dtype, device=device).unsqueeze(0)
         return dict(
-            image=image,
+            goal=goal,
             vector=vector,
         )
 
