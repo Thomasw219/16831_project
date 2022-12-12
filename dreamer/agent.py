@@ -40,7 +40,7 @@ class DreamerV2:
 
     def reset(self):
         self.mem.reset_episode()
-        self.actor_state = None
+        self.state = None
 
     def log_episode(self):
         metrics = {"episodes/" + k : v for k, v in self.mem.last_episode_metrics().items()}
