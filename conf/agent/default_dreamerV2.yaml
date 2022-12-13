@@ -10,6 +10,6 @@ save_every: 5000
 test_every: 25
 
 defaults:
-  - world_model: default_world_model
+  - world_model: mod2_world_model
   - behavior: default_actor_critic
   - memory: default_memory
