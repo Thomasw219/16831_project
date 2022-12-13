@@ -7,7 +7,7 @@ import numpy as np
 
 from omegaconf import DictConfig, OmegaConf
 
-from dreamer.agent import DreamerV2, HERDreamerV2
+from dreamer.agent import DreamerV2, HERDreamerV2, GCDreamer
 
 def train_agent(agent: DreamerV2, env, n_steps):
     steps_elapsed = 0
@@ -62,11 +62,14 @@ def main(cfg: DictConfig):
     EVAL_LOG_PATH = "/home/luyuan/thomaswe/16831_project/data/"
     LOG_DIR = "./logs/"
     RUN_NAME = "run0"
-    ALGO = "HERDreamerV2_lower_kl"
+    ALGO = "GCDreamerV2_lower_kl"
 
     if "HER" in ALGO:
         agent = HERDreamerV2(cfg.agent, dict(vector=(4,), goal=(2,)), env.action_space.sample().shape[0], RUN_NAME)
         print("HER AGENT")
+    elif "GC" in ALGO:
+        agent = GCDreamer(cfg.agent, dict(vector=(4,), goal=(2,)), env.action_space.sample().shape[0], RUN_NAME)
+        print("GC AGENT")
     else:
         agent = DreamerV2(cfg.agent, dict(vector=(4,), goal=(2,)), env.action_space.sample().shape[0], RUN_NAME)
         print("VANILLA AGENT")

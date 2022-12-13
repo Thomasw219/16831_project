@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from .utils import FreezeParameters
 from .memory import Memory, HERMemory
-from .networks import RSSM, FusionDecoder, FusionEncoder, MLPDistribution
+from .networks import RSSM, FusionDecoder, FusionEncoder, MLPDistribution, StandardMLP
 
 class DreamerV2:
     def __init__(self, cfg, obs_shape, action_dim, name):
@@ -311,6 +311,107 @@ class HERDreamerV2(DreamerV2):
         super().__init__(cfg, obs_shape, action_dim, name)
         self.mem = HERMemory(cfg.memory)
 
+class GCDreamer(HERDreamerV2):
+    def __init__(self, cfg, obs_shape, action_dim, name):
+        super().__init__(cfg, obs_shape, action_dim, name)
+        self.wm = GCWorldModel(cfg.world_model, obs_shape, action_dim)
+        self.behavior = GCActorCritic(cfg.behavior, self.feat_dim, self.action_dim, obs_shape['goal'][0])
+        self.wm.to(self.cfg.device)
+        self.wm_opt = optim.Adam(self.wm.parameters(), lr=self.cfg.world_model.lr, eps=self.cfg.world_model.eps, weight_decay=self.cfg.world_model.wd)
+        self.behavior.to(self.cfg.device)
+
+    def step(self, obs):
+        with torch.no_grad():
+            obs = self.wm.preprocess_obs(obs, device=self.cfg.device)
+            state, feat = self.wm.encode_obs(obs, self.state, self.cfg.device)
+            action = self.behavior.get_action(torch.cat([feat, obs['goal']], dim=-1))
+            self.state = self.wm.encode_action(action, state)
+        return action.cpu().squeeze().numpy()
+
+    def generate_trajectories(self, start_state, is_last, goals):
+        beginning_is_last = is_last
+        prev_state = start_state
+        prev_feat = self.wm.rssm.get_feat_b(start_state)
+        feats = [prev_feat]
+        actions = [torch.zeros_like(self.behavior.actor.forward_reparameterize(torch.cat([prev_feat, goals], dim=-1))[0])]
+        action_means = []
+        action_entropies = []
+        for _ in range(self.cfg.behavior.horizon):
+            action, action_mean, _, action_entropy = self.behavior.actor.forward_reparameterize(torch.cat([prev_feat, goals], dim=-1))
+            state = self.wm.rssm.img_step(prev_state, action, sample=True)
+            feat = self.wm.rssm.get_feat_b(state)
+            feats.append(feat)
+            actions.append(action)
+            action_means.append(action_mean)
+            action_entropies.append(action_entropy)
+            prev_state = state
+            prev_feat = feat
+
+        feats = torch.stack(feats)
+        actions = torch.stack(actions)
+        action_means = torch.stack(action_means)
+        action_entropies = torch.stack(action_entropies)
+        is_lasts = self.wm.discount_decoder(feats).mean
+        is_lasts[0] = beginning_is_last
+        discounts = torch.where(is_lasts > self.cfg.termination_threshold, torch.zeros_like(is_lasts), self.cfg.behavior.gamma * torch.ones_like(is_lasts))
+        goal_embeddings = self.wm.goal_encoder(goals).unsqueeze(0).expand(self.cfg.behavior.horizon + 1, -1, -1)
+        rewards = self.wm.reward_decoder(torch.cat([feats, goal_embeddings], dim=-1)).mean
+        weights = torch.cumprod(torch.cat([torch.ones_like(discounts[0:1]) * self.cfg.behavior.gamma, discounts[:-1]], dim=0), dim=0)
+        return dict(
+            feats=feats,
+            discounts=discounts,
+            rewards=rewards,
+            weights=weights,
+            actions=actions,
+            action_means=action_means,
+            action_entropies=action_entropies,
+            goals=goals,
+        )
+
+    def train_behavior_step(self, data):
+        data['is_firsts'][0, :, 0] = 1
+        with torch.autocast('cuda' if 'cuda' in self.cfg.device else 'cpu'):
+            with torch.no_grad():
+                _, _, posts, _ = self.wm.loss(data)
+            post = {k : torch.concat([post[k] for post in posts], dim=0).detach() for k in posts[0].keys()}
+            with FreezeParameters(self.wm):
+                trajectories = self.generate_trajectories(post, data['is_lasts'].reshape(-1, 1), data['observations']['goals'].reshape(-1, 2))
+                if self.global_step % 25 == 0:
+                    self.summary_writer.add_histogram("action_means_0", trajectories['action_means'][:, :, 0].flatten(), global_step=self.global_step)
+                    self.summary_writer.add_histogram("action_means_1", trajectories['action_means'][:, :, 1].flatten(), global_step=self.global_step)
+                actor_loss, critic_loss, metrics = self.behavior.loss(trajectories)
+
+        self.behavior.actor_opt.zero_grad()
+        actor_loss.backward()
+        actor_grad_norm = nn.utils.clip_grad_norm_(self.behavior.actor.parameters(), self.cfg.behavior.actor_clip)
+        metrics['actor_grad_norm'] = actor_grad_norm
+        self.behavior.actor_opt.step()
+
+        self.behavior.critic_opt.zero_grad()
+        critic_loss.backward()
+        critic_grad_norm = nn.utils.clip_grad_norm_(self.behavior.critic.parameters(), self.cfg.behavior.critic_clip)
+        metrics['critic_grad_norm'] = critic_grad_norm
+        self.behavior.critic_opt.step()
+
+        self.update_critic()
+
+        metrics = {"behavior/train/" + k : v for k, v in metrics.items()}
+        return metrics
+
+    def test_behavior_step(self, data):
+        data['is_firsts'][0, :, 0] = 1
+        with torch.autocast('cuda' if 'cuda' in self.cfg.device else 'cpu'):
+            with torch.no_grad():
+                _, _, posts, _ = self.wm.loss(data)
+                post = {k : torch.concat([post[k] for post in posts], dim=0).detach() for k in posts[0].keys()}
+                trajectories = self.generate_trajectories(post, data['is_lasts'].reshape(-1, 1))
+                if self.global_step % 25 == 0:
+                    self.summary_writer.add_histogram("action_means_0", trajectories['action_means'][:, :, 0].flatten(), global_step=self.global_step)
+                    self.summary_writer.add_histogram("action_means_1", trajectories['action_means'][:, :, 1].flatten(), global_step=self.global_step)
+                _, _, metrics = self.behavior.loss(trajectories)
+        metrics = {"behavior/test/" + k : v for k, v in metrics.items()}
+        return metrics
+
 class WorldModel(nn.Module):
     def __init__(self, cfg, obs_shape, action_dim):
         super().__init__()
@@ -408,6 +509,78 @@ class WorldModel(nn.Module):
 
     def preprocess(self, data):
         return data
+
+class GCWorldModel(WorldModel):
+    def __init__(self, cfg, obs_shape, action_dim):
+        super().__init__(cfg, obs_shape, action_dim)
+        self.encoder = StandardMLP(input_dim=self.vector_shape[0], **cfg.vector_encoder)
+        self.rssm = RSSM(action_dim, self.encoder.output_dim, **cfg.rssm)
+        feature_dim = self.rssm.get_output_dim()
+        self.goal_encoder = StandardMLP(input_dim=self.goal_shape[0], **cfg.goal_encoder)
+
+        self.obs_decoder = MLPDistribution(feature_dim, output_dim=self.vector_shape[0], **cfg.vector_decoder)
+        self.reward_decoder = MLPDistribution(feature_dim + self.goal_encoder.output_dim, **cfg.reward_decoder)
+        self.discount_decoder = MLPDistribution(feature_dim, **cfg.discount_decoder)
+
+    def loss(self, data, state=None):
+        data = self.preprocess(data)
+        observations = data['observations']
+        embeddings = self.encoder(observations["vectors"])
+
+        posts, priors = self.rssm.observe(embeddings, data['actions'], is_firsts=data['is_firsts'], post=state)
+        kl_loss, kl_val, post_entropy, prior_entropy = self.rssm.kl_loss(posts, priors)
+
+        goal_embeddings = self.goal_encoder.forward(observations["goals"])
+        feats = self.rssm.get_feat_t_b(posts)
+        vector_loss, vector_mse = self.obs_decoder.get_nll_mse(feats, observations["vectors"])
+        reward_loss, reward_mse = self.reward_decoder.get_nll_mse(torch.cat([feats, goal_embeddings], dim=-1), data['rewards'])
+        discount_loss = -torch.mean(self.discount_decoder(feats).log_prob(data['is_lasts']))
+        model_loss = self.cfg.vector_scale * vector_loss + self.cfg.reward_scale * reward_loss + self.cfg.discount_scale * discount_loss + self.cfg.beta * kl_loss
+
+        metrics = dict(
+            kl_loss=kl_loss,
+            kl_val=kl_val,
+            vector_loss=vector_loss,
+            reward_loss=reward_loss,
+            discount_loss=discount_loss,
+            model_loss=model_loss,
+            prior_entropy=prior_entropy,
+            post_entropy=post_entropy,
+            vector_mse=vector_mse,
+            reward_mse=reward_mse,
+        )
+        last_state = posts[-1]
+        return model_loss, last_state, posts, metrics
+
+    def encode_obs(self, obs, prior=None, device='cpu'):
+        if prior is None:
+            prev_state = self.rssm.initial(1, torch.float32, device)
+            prev_action = torch.zeros(1, self.action_dim, dtype=torch.float32, device=device)
+            prior = self.rssm.img_step(prev_state, prev_action, sample=True)
+
+        obs_embed = self.encoder(obs['vectors'] if 'vectors' in obs.keys() else obs['vector'])
+        logits = self.rssm.posterior_net(torch.cat([prior['deter'], obs_embed], dim=-1)).reshape(1, self.rssm.stoch, self.rssm.discrete)
+        stoch = self.rssm.get_stoch(logits, sample=True)
+        post = dict(
+            logits=logits,
+            stoch=stoch,
+            deter=prior['deter'],
+        )
+        return post, self.rssm.get_feat_b(post)
+
+    def decode(self, states, obs):
+        goal_embeddings = self.goal_encoder.forward(obs['goals'] if 'goals' in obs.keys() else obs['goal'])
+        feats = self.rssm.get_feat_t_b(states)
+        vector_dist = self.obs_decoder(feats)
+        reward_dist = self.reward_decoder(torch.cat([feats, goal_embeddings], dim=-10))
+        discount_dist = self.discount_decoder(feats)
+        return dict(
+            observations=dict(
+                vectors=vector_dist.mean,
+            ),
+            rewards = reward_dist.mean,
+            is_lasts = discount_dist.mean,
+        )
 
 class ActorCritic(nn.Module):
     def __init__(self, cfg, feature_dim, action_dim):
@@ -521,3 +694,70 @@ class ActorCritic(nn.Module):
         self.critic_opt = optim.Adam(self.critic.parameters(), **self.cfg.critic_opt)
         self.target_critic.to(device)
         self.hard_update_target_critic()
+
+class GCActorCritic(ActorCritic):
+    def __init__(self, cfg, feature_dim, action_dim, goal_dim):
+        super().__init__(cfg, feature_dim, action_dim)
+        self.goal_dim = goal_dim
+
+        self.actor = MLPDistribution(feature_dim + goal_dim, output_dim=action_dim, **cfg.actor)
+        self.actor_opt = optim.Adam(self.actor.parameters(), **cfg.actor_opt)
+        self.critic = MLPDistribution(feature_dim + goal_dim, **cfg.critic)
+        self.critic_opt = optim.Adam(self.actor.parameters(), **cfg.critic_opt)
+        self.target_critic = MLPDistribution(feature_dim + goal_dim, **cfg.critic)
+        self.hard_update_target_critic()
+
+    def compute_lambda_return(self, trajectories):
+        feats = trajectories['feats']
+        T = feats.shape[0]
+        goals = trajectories['goals'].unsqueeze(0).expand(T, -1, -1)
+        rewards = trajectories['rewards']
+        discounts = trajectories['discounts']
+        target_values = self.target_critic(torch.cat([feats, goals], dim=-1)).mean
+        trajectories['target_values'] = target_values
+        indices = reversed(range(rewards.shape[0]))
+        v = deque()
+        for i in indices:
+            if len(v) == 0:
+                v_t = target_values[i]
+            else:
+                v_tp1 = (1 - self.cfg.lamb) * target_values[i + 1] + self.cfg.lamb * v[0]
+                v_t = rewards[i] + discounts[i] * v_tp1
+            v.appendleft(v_t)
+        return torch.stack(list(v))
+
+    def get_actor_loss(self, trajectories, lambda_return):
+        weights = trajectories['weights']
+        weighted_return = torch.mean(lambda_return[1:-2] * weights[1:-2])
+        entropy = torch.mean(trajectories['action_entropies'])
+        mean_abs = torch.abs(trajectories['action_means'])
+        pre_tanh_bound_penalty = torch.mean(torch.where(mean_abs > self.cfg.pre_tanh_bound, mean_abs - self.cfg.pre_tanh_bound, torch.zeros_like(mean_abs)))
+        if self.cfg.policy_grad == 'dynamics':
+            # Backprop through dynamics to get policy gradient
+            loss = -weighted_return - self.cfg.eta * entropy #+ self.cfg.pre_tanh_bound_penalty_scale * pre_tanh_bound_penalty
+        elif self.cfg.policy_grad == 'reinforce':
+            # REINFORCE policy gradient
+            feats = trajectories['feats']
+            action_log_prob = self.actor.forward(feats[:-2]).log_prob(trajectories['actions'][1:-1].detach())
+            loss = torch.mean(-action_log_prob * (lambda_return[1:-1] - self.target_critic(feats[:-2]).mean).detach().squeeze(-1))
+        metrics = dict(
+            img_weighted_return=weighted_return,
+            actor_loss=loss,
+            entropy=entropy,
+            pre_tanh_bound_penalty=pre_tanh_bound_penalty,
+        )
+        return loss, metrics
+
+    def get_critic_loss(self, trajectories, lambda_return):
+        lambda_return = lambda_return.detach()
+        feats = trajectories['feats'].detach()
+        T = feats.shape[0]
+        goals = trajectories['goals'].unsqueeze(0).expand(T, -1, -1)
+        weights = trajectories['weights'].detach()
+        v_dist = self.critic(torch.cat([feats, goals], dim=-1)[:-1])
+        weighted_nll = -torch.mean(v_dist.log_prob(lambda_return[:-1]) * weights[:-1].squeeze(-1))
+        metrics=dict(
+            img_weighted_value_nll=weighted_nll,
+            critic_loss=weighted_nll,
+        )
+        return weighted_nll, metrics

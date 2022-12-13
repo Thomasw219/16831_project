@@ -1,7 +1,7 @@
 
 rssm: {hidden: 200, deter: 200, stoch: 32, discrete: 32, activation: elu, kl_balance: 0.8}
-goal_encoder: {activation: elu, output_dim: 400, layer_sizes: [256], activate_last: True}
-vector_encoder: {activation: elu, output_dim: 400, layer_sizes: [256], activate_last: True}
+goal_encoder: {activation: elu, output_dim: 200, layer_sizes: [256, 256], activate_last: True}
+vector_encoder: {activation: elu, output_dim: 200, layer_sizes: [256, 256], activate_last: True}
 fusion_encoder: {activation: elu, output_dim: 200, layer_sizes: [], activate_last: True}
 
 goal_decoder: {activation: elu, layer_sizes: [256, 256], dist: mse}
